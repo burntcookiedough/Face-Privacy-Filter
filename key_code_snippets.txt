@@ -1,0 +1,50 @@
+FACE PRIVACY FILTER - KEY CODE SNIPPETS
+
+Loads face detection model and finds faces in each frame:
+
+cv::CascadeClassifier faceCascade;
+faceCascade.load("haarcascade_frontalface_default.xml");
+std::vector<cv::Rect> faces;
+faceCascade.detectMultiScale(gray, faces, 1.1, 3, 0, cv::Size(30, 30));
+
+Captures video from webcam and displays it on screen:
+
+cv::VideoCapture cap(0);
+cap >> frame;
+cv::imshow("Face Privacy Filter", frame);
+
+Creates an interactive control to let users switch between privacy filter modes:
+
+int privacyMode = 0; // 0 = No Filter, 1 = Blur, 2 = Pixelation, 3 = Black Box, 4 = Yellow Box
+cv::createTrackbar("Mode", "Controls", nullptr, 4, onTrackbar);
+void onTrackbar(int value, void*) {
+    privacyMode = value;
+}
+
+Applies one of four different privacy effects to each detected face based on user selection:
+
+for (const auto &face : faces) {
+    cv::Mat faceROI = frame(face);
+    
+    if (privacyMode == 2) {
+        // Gaussian Blur
+        cv::GaussianBlur(faceROI, faceROI, cv::Size(55, 55), 0);
+    } else if (privacyMode == 3) {
+        // Pixelation (Mosaic Effect)
+        applyPixelation(faceROI, 10);
+    } else if (privacyMode == 4) {
+        // Black Box Censoring
+        cv::rectangle(frame, face, cv::Scalar(0, 0, 0), cv::FILLED);
+    } else if (privacyMode == 1) {
+        // Yellow Box Outline
+        cv::rectangle(frame, face, cv::Scalar(0, 255, 255), 2);
+    }
+}
+
+Creates pixelation effect by downscaling and then upscaling the face region:
+
+void applyPixelation(cv::Mat& faceROI, int pixelSize = 10) {
+    cv::Mat temp;
+    cv::resize(faceROI, temp, cv::Size(faceROI.cols / pixelSize, faceROI.rows / pixelSize), 0, 0, cv::INTER_LINEAR);
+    cv::resize(temp, faceROI, faceROI.size(), 0, 0, cv::INTER_NEAREST);
+} 

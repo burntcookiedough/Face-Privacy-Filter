@@ -1,0 +1,151 @@
+
+```cpp
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <cuda_runtime.h> // Added for CUDA Runtime API
+```
+- **What’s happening?** We’re pulling in the OpenCV library (for camera + image stuff), the iostream library (for printing text), and CUDA runtime (so we can talk to the GPU).
+
+```cpp
+__global__ void sobel_filter(const unsigned char* input, unsigned char* output, int width, int height);
+```
+- **What’s happening?** This forward-declares a GPU function (kernel) called `sobel_filter`. We’ll implement it in a separate `.cu` file. It takes a grayscale image (`input`), writes edges into `output`, and knows the image size.
+
+```cpp
+#define cudaCheckError(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{ … }
+```
+- **What’s happening?** This is a quick macro + helper that checks every CUDA call for errors. If something goes wrong, it prints the file and line number and crashes. Super helpful for debugging!
+
+```cpp
+int main() {
+    cv::VideoCapture cap(0);
+    if (!cap.isOpened()) { … }
+```
+- **What’s happening?** Start `main()`. Open the default camera (`0`). If it fails, print an error and quit.
+
+```cpp
+    int frame_width = 640;
+    int frame_height = 480;
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, frame_width);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, frame_height);
+```
+- **What’s happening?** Ask the camera for a 640×480 resolution.
+
+```cpp
+    frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    std::cout << "Actual frame resolution: " << frame_width << "x" << frame_height << std::endl;
+```
+- **What’s happening?** Double-check what resolution the camera actually gave us (some cams ignore your request). Then print it.
+
+```cpp
+    cv::Mat frame, gray;
+    cv::Mat edgeImage(frame_height, frame_width, CV_8UC1);
+```
+- **What’s happening?** Create three OpenCV matrices:
+  - `frame` for the color camera input,
+  - `gray` for the grayscale conversion,
+  - `edgeImage` pre-allocated as a single-channel 8‑bit image to hold the edges.
+
+```cpp
+    unsigned char *d_input, *d_output;
+    size_t numBytes = frame_width * frame_height * sizeof(unsigned char);
+```
+- **What’s happening?** Declare two pointers for GPU memory, and calculate how many bytes we need (width × height × 1 byte per pixel).
+
+```cpp
+    cudaCheckError( cudaMalloc((void**)&d_input, numBytes) );
+    cudaCheckError( cudaMalloc((void**)&d_output, numBytes) );
+```
+- **What’s happening?** Ask the GPU for two buffers of that size: one for input, one for output.
+
+```cpp
+    const int TILE_SIZE = 16;
+    dim3 blockSize(TILE_SIZE, TILE_SIZE);
+    dim3 gridSize((frame_width + TILE_SIZE - 1) / TILE_SIZE,
+                  (frame_height + TILE_SIZE - 1) / TILE_SIZE);
+```
+- **What’s happening?** Decide how to split work on the GPU:
+  - Each block is 16×16 threads.
+  - The grid has enough blocks to cover the whole image (ceiling division).
+
+```cpp
+    std::cout << "Kernel launch config: Grid=" << gridSize.x << "x" << gridSize.y
+              << ", Block=" << blockSize.x << "x" << blockSize.y << std::endl;
+    std::cout << "Press ESC to exit." << std::endl;
+```
+- **What’s happening?** Print your GPU launch setup and let you know how to quit.
+
+```cpp
+    while (true) {
+        cap >> frame;
+        if (frame.empty()) { … }
+```
+- **What’s happening?** Start a loop. Grab one frame from the camera into `frame`. If it’s empty, break out.
+
+```cpp
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+```
+- **What’s happening?** Turn the color frame into a single-channel gray image. Sobel only needs gray.
+
+```cpp
+        cudaCheckError( cudaMemcpy(d_input, gray.data, numBytes, cudaMemcpyHostToDevice) );
+```
+- **What’s happening?** Copy the gray image from CPU memory to the GPU’s `d_input`.
+
+```cpp
+        sobel_filter<<<gridSize, blockSize>>>(d_input, d_output, frame_width, frame_height);
+```
+- **What’s happening?** Launch the Sobel kernel on the GPU. It runs in parallel on all pixels.
+
+```cpp
+        cudaError_t kernelError = cudaGetLastError();
+        if (kernelError != cudaSuccess) { … }
+```
+- **What’s happening?** Immediately check if launching the kernel failed. If so, print and quit.
+
+```cpp
+        cudaCheckError( cudaDeviceSynchronize() );
+```
+- **What’s happening?** Wait for the GPU to finish the kernel before moving on. Good practice.
+
+```cpp
+        cudaCheckError( cudaMemcpy(edgeImage.data, d_output, numBytes, cudaMemcpyDeviceToHost) );
+```
+- **What’s happening?** Copy the result (edge map) from GPU back into our `edgeImage` on the CPU.
+
+```cpp
+        cv::imshow("Grayscale Feed", gray);
+        cv::imshow("Sobel Edges (CUDA)", edgeImage);
+```
+- **What’s happening?** Show two windows: one with the gray feed, one with the edges.
+
+```cpp
+        if (cv::waitKey(1) == 27) {
+            std::cout << "ESC key pressed. Exiting..." << std::endl;
+            break;
+        }
+    }
+```
+- **What’s happening?** Wait 1 ms for a key press. If it’s ESC (27), print a message and break the loop.
+
+```cpp
+    cudaCheckError( cudaFree(d_input) );
+    cudaCheckError( cudaFree(d_output) );
+    std::cout << "GPU memory freed." << std::endl;
+```
+- **What’s happening?** Free the GPU buffers when you’re done, and print confirmation.
+
+```cpp
+    cap.release();
+    cv::destroyAllWindows();
+    std::cout << "Camera released and windows closed." << std::endl;
+    return 0;
+}
+```
+- **What’s happening?** Clean up: release the camera, close the display windows, print a final message, and exit.
+
+---
+
